@@ -404,10 +404,22 @@ impl Config {
             }
         } else if msvc {
             // If we're on MSVC we need to be sure to use the right generator or
-            // otherwise we won't get 32/64 bit correct automatically.
-            // This also guarantees that NMake generator isn't chosen implicitly.
+            // otherwise we won't get 32/64 bit correct automatically. If a
+            // visual studio generator cannot be found, we'll try using the
+            // generator specified by CMAKE_MSVC_GENERATOR, if there is one,
+            // otherwise panic.
             if self.generator.is_none() {
-                cmd.arg("-G").arg(self.visual_studio_generator(&target));
+                match self.visual_studio_generator(&target) {
+                    Ok(vs_generator) => cmd.arg("-G").arg(vs_generator),
+                    Err(msg) => {
+                        if let Ok(s) = env::var("CMAKE_MSVC_GENERATOR") {
+                            is_ninja = s.contains("Ninja");
+                            cmd.arg("-G").arg(s)
+                        } else {
+                            panic!(msg);
+                        }
+                    }
+                };
             }
             if target.contains("x86_64") && !is_ninja {
                 cmd.arg("-Thost=x64");
@@ -698,26 +710,26 @@ impl Config {
         return dst;
     }
 
-    fn visual_studio_generator(&self, target: &str) -> String {
+    fn visual_studio_generator(&self, target: &str) -> Result<String, String> {
         use cc::windows_registry::{find_vs_version, VsVers};
 
         let base = match find_vs_version() {
             Ok(VsVers::Vs15) => "Visual Studio 15 2017",
             Ok(VsVers::Vs14) => "Visual Studio 14 2015",
             Ok(VsVers::Vs12) => "Visual Studio 12 2013",
-            Ok(_) => panic!(
+            Ok(_) => return Err(format!(
                 "Visual studio version detected but this crate \
                  doesn't know how to generate cmake files for it, \
                  can the `cmake` crate be updated?"
-            ),
-            Err(msg) => panic!(msg),
+            )),
+            Err(msg) => return Err(msg),
         };
         if target.contains("i686") {
-            base.to_string()
+            Ok(base.to_string())
         } else if target.contains("x86_64") {
-            format!("{} Win64", base)
+            Ok(format!("{} Win64", base))
         } else {
-            panic!("unsupported msvc target: {}", target);
+            Err(format!("unsupported msvc target: {}", target))
         }
     }
 
